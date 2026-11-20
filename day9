@@ -1,0 +1,564 @@
+
+-- =====================================================
+-- HEXAWARE DAY 9 ASSIGNMENT
+-- SET 1: RETAIL ORDER FULFILMENT
+-- MYSQL 8.4 LTS
+-- =====================================================
+
+
+-- STEP 1: CREATE DATABASE
+
+DROP DATABASE IF EXISTS retail_order_db;
+
+CREATE DATABASE retail_order_db;
+
+USE retail_order_db;
+
+
+-- STEP 2: CREATE CUSTOMERS TABLE
+
+CREATE TABLE customers (
+    customer_id INT PRIMARY KEY AUTO_INCREMENT,
+    customer_name VARCHAR(100) NOT NULL,
+    email VARCHAR(100),
+    phone VARCHAR(15)
+);
+
+
+-- STEP 3: CREATE PRODUCTS TABLE
+
+CREATE TABLE products (
+    product_id INT PRIMARY KEY AUTO_INCREMENT,
+    product_name VARCHAR(100) NOT NULL,
+    category VARCHAR(50),
+    quantity INT NOT NULL,
+    selling_price DECIMAL(10,2) NOT NULL,
+    cost_price DECIMAL(10,2),
+    supplier VARCHAR(100)
+);
+
+
+-- STEP 4: CREATE ORDERS TABLE
+
+CREATE TABLE orders (
+    order_id INT PRIMARY KEY AUTO_INCREMENT,
+    customer_id INT NOT NULL,
+    order_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+    status VARCHAR(20) DEFAULT 'PENDING',
+
+    FOREIGN KEY (customer_id)
+    REFERENCES customers(customer_id)
+);
+
+
+-- STEP 5: CREATE ORDER_ITEMS TABLE
+
+CREATE TABLE order_items (
+    order_item_id INT PRIMARY KEY AUTO_INCREMENT,
+    order_id INT NOT NULL,
+    product_id INT NOT NULL,
+    quantity INT NOT NULL,
+    unit_price DECIMAL(10,2) NOT NULL,
+    line_total DECIMAL(10,2) NOT NULL,
+
+    FOREIGN KEY (order_id)
+    REFERENCES orders(order_id),
+
+    FOREIGN KEY (product_id)
+    REFERENCES products(product_id)
+);
+
+
+-- STEP 6: CREATE ORDER_FOLLOWUPS TABLE
+
+CREATE TABLE order_followups (
+    followup_id INT PRIMARY KEY AUTO_INCREMENT,
+    order_id INT NOT NULL,
+    followup_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+    remarks VARCHAR(255),
+
+    UNIQUE (order_id),
+
+    FOREIGN KEY (order_id)
+    REFERENCES orders(order_id)
+);
+
+
+-- STEP 7: INSERT CUSTOMER RECORDS
+
+INSERT INTO customers
+(customer_name, email, phone)
+VALUES
+('Arun', 'arun@gmail.com', '9876543210'),
+('Priya', 'priya@gmail.com', '9876543211'),
+('Rahul', 'rahul@gmail.com', '9876543212'),
+('Sneha', 'sneha@gmail.com', '9876543213'),
+('Kumar', 'kumar@gmail.com', '9876543214');
+
+
+-- STEP 8: INSERT PRODUCT RECORDS
+
+INSERT INTO products
+(product_name, category, quantity,
+ selling_price, cost_price, supplier)
+VALUES
+('Laptop', 'Electronics', 20, 50000, 40000, 'Dell'),
+('Mouse', 'Accessories', 5, 500, 300, 'Logitech'),
+('Keyboard', 'Accessories', 8, 1000, 700, 'HP'),
+('Monitor', 'Electronics', 15, 12000, 9000, 'Samsung'),
+('Printer', 'Electronics', 3, 8000, 6000, 'Canon');
+
+
+-- STEP 9: INSERT ORDER RECORDS
+
+INSERT INTO orders
+(customer_id, order_date, status)
+VALUES
+(1, NOW() - INTERVAL 5 DAY, 'PENDING'),
+(2, NOW() - INTERVAL 4 DAY, 'PENDING'),
+(3, NOW() - INTERVAL 2 DAY, 'PENDING'),
+(4, NOW() - INTERVAL 6 DAY, 'DELIVERED'),
+(5, NOW(), 'PENDING');
+
+
+-- STEP 10: INSERT ORDER ITEMS
+
+INSERT INTO order_items
+(order_id, product_id, quantity, unit_price, line_total)
+VALUES
+(1, 1, 1, 50000, 50000),
+(2, 2, 2, 500, 1000),
+(3, 3, 1, 1000, 1000),
+(4, 4, 1, 12000, 12000);
+
+
+-- =====================================================
+-- TASK 1: CREATE VIEWS
+-- =====================================================
+
+
+-- VIEW 1: ORDER SUMMARY
+-- HIDE COST PRICE AND SUPPLIER
+
+CREATE VIEW vw_order_summary AS
+SELECT
+    o.order_id,
+    c.customer_name,
+    o.order_date,
+    o.status,
+    p.product_name,
+    oi.quantity,
+    oi.unit_price,
+    oi.line_total
+FROM orders o
+JOIN customers c
+ON o.customer_id = c.customer_id
+JOIN order_items oi
+ON o.order_id = oi.order_id
+JOIN products p
+ON oi.product_id = p.product_id;
+
+
+-- DISPLAY ORDER SUMMARY
+
+SELECT * FROM vw_order_summary;
+
+
+-- VIEW 2: LOW STOCK
+
+CREATE VIEW vw_low_stock AS
+SELECT
+    product_id,
+    product_name,
+    category,
+    quantity,
+    selling_price
+FROM products
+WHERE quantity < 10
+WITH CHECK OPTION;
+
+
+-- DISPLAY LOW STOCK
+
+SELECT * FROM vw_low_stock;
+
+
+-- DEMONSTRATE UPDATABLE VIEW
+
+UPDATE vw_low_stock
+SET quantity = 6
+WHERE product_id = 2;
+
+
+-- CHECK UPDATED VIEW
+
+SELECT * FROM vw_low_stock;
+
+
+-- INVALID UPDATE TEST
+-- RUN THIS SEPARATELY TO SEE THE CHECK OPTION ERROR:
+-- UPDATE vw_low_stock
+-- SET quantity = 20
+-- WHERE product_id = 2;
+
+
+-- =====================================================
+-- TASK 2: STORED PROCEDURE
+-- sp_place_order
+-- =====================================================
+
+DELIMITER //
+
+CREATE PROCEDURE sp_place_order(
+    IN p_customer_id INT,
+    IN p_product_id INT,
+    IN p_quantity INT,
+    OUT p_order_id INT
+)
+BEGIN
+
+    DECLARE v_stock INT;
+    DECLARE v_price DECIMAL(10,2);
+    DECLARE v_count INT;
+
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        ROLLBACK;
+        RESIGNAL;
+    END;
+
+    START TRANSACTION;
+
+    SET p_order_id = NULL;
+
+    -- VALIDATE QUANTITY
+
+    IF p_quantity <= 0 THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT =
+        'Quantity must be greater than zero';
+    END IF;
+
+
+    -- VALIDATE CUSTOMER
+
+    SELECT COUNT(*)
+    INTO v_count
+    FROM customers
+    WHERE customer_id = p_customer_id;
+
+    IF v_count = 0 THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT =
+        'Customer does not exist';
+    END IF;
+
+
+    -- VALIDATE PRODUCT
+
+    SELECT COUNT(*)
+    INTO v_count
+    FROM products
+    WHERE product_id = p_product_id;
+
+    IF v_count = 0 THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT =
+        'Product does not exist';
+    END IF;
+
+
+    -- FETCH STOCK AND PRICE
+
+    SELECT quantity, selling_price
+    INTO v_stock, v_price
+    FROM products
+    WHERE product_id = p_product_id
+    FOR UPDATE;
+
+
+    -- CHECK STOCK
+
+    IF v_stock < p_quantity THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT =
+        'Insufficient stock';
+    END IF;
+
+
+    -- INSERT ORDER
+
+    INSERT INTO orders(customer_id, status)
+    VALUES(p_customer_id, 'PENDING');
+
+
+    SET p_order_id = LAST_INSERT_ID();
+
+
+    -- INSERT ORDER ITEM
+
+    INSERT INTO order_items(
+        order_id,
+        product_id,
+        quantity,
+        unit_price,
+        line_total
+    )
+    VALUES(
+        p_order_id,
+        p_product_id,
+        p_quantity,
+        v_price,
+        p_quantity * v_price
+    );
+
+
+    -- UPDATE PRODUCT STOCK
+
+    UPDATE products
+    SET quantity = quantity - p_quantity
+    WHERE product_id = p_product_id;
+
+
+    COMMIT;
+
+END //
+
+DELIMITER ;
+
+
+-- EXECUTE STORED PROCEDURE
+
+CALL sp_place_order(1, 1, 2, @new_order_id);
+
+
+-- DISPLAY OUT PARAMETER
+
+SELECT @new_order_id AS New_Order_ID;
+
+
+-- CHECK NEW ORDER
+
+SELECT * FROM orders
+WHERE order_id = @new_order_id;
+
+
+-- CHECK NEW ORDER ITEMS
+
+SELECT * FROM order_items
+WHERE order_id = @new_order_id;
+
+
+-- CHECK UPDATED STOCK
+
+SELECT * FROM products
+WHERE product_id = 1;
+
+
+-- =====================================================
+-- TASK 3: STORED FUNCTION
+-- fn_order_total_with_tax
+-- =====================================================
+
+DELIMITER //
+
+CREATE FUNCTION fn_order_total_with_tax(
+    p_order_id INT
+)
+RETURNS DECIMAL(12,2)
+READS SQL DATA
+BEGIN
+
+    DECLARE v_total DECIMAL(12,2);
+
+    SELECT COALESCE(SUM(line_total), 0)
+    INTO v_total
+    FROM order_items
+    WHERE order_id = p_order_id;
+
+    RETURN v_total + (v_total * 0.18);
+
+END //
+
+DELIMITER ;
+
+
+-- USE FUNCTION INSIDE SELECT
+
+SELECT
+    order_id,
+    fn_order_total_with_tax(order_id)
+    AS Total_With_Tax
+FROM orders;
+
+
+-- TEST FUNCTION
+
+SELECT fn_order_total_with_tax(1)
+AS Order_Total_With_Tax;
+
+
+-- =====================================================
+-- TASK 4: CURSOR WITH NOT FOUND HANDLER
+-- =====================================================
+
+DELIMITER //
+
+CREATE PROCEDURE sp_pending_order_followups()
+BEGIN
+
+    DECLARE v_order_id INT;
+    DECLARE v_done INT DEFAULT 0;
+
+
+    -- DECLARE CURSOR
+
+    DECLARE order_cursor CURSOR FOR
+        SELECT order_id
+        FROM orders
+        WHERE status = 'PENDING'
+        AND order_date < NOW() - INTERVAL 3 DAY;
+
+
+    -- NOT FOUND HANDLER
+
+    DECLARE CONTINUE HANDLER FOR NOT FOUND
+        SET v_done = 1;
+
+
+    -- OPEN CURSOR
+
+    OPEN order_cursor;
+
+
+    order_loop: LOOP
+
+        -- FETCH RECORD
+
+        FETCH order_cursor INTO v_order_id;
+
+
+        -- STOP WHEN NO RECORDS
+
+        IF v_done = 1 THEN
+            LEAVE order_loop;
+        END IF;
+
+
+        -- INSERT FOLLOW-UP
+
+        INSERT IGNORE INTO order_followups(
+            order_id,
+            remarks
+        )
+        VALUES(
+            v_order_id,
+            'Order pending for more than 3 days'
+        );
+
+    END LOOP;
+
+
+    -- CLOSE CURSOR
+
+    CLOSE order_cursor;
+
+END //
+
+DELIMITER ;
+
+
+-- EXECUTE CURSOR PROCEDURE
+
+CALL sp_pending_order_followups();
+
+
+-- DISPLAY FOLLOW-UP RECORDS
+
+SELECT * FROM order_followups;
+
+
+-- =====================================================
+-- TASK 4: SET-BASED APPROACH
+-- REWRITE CURSOR USING INSERT SELECT
+-- =====================================================
+
+INSERT IGNORE INTO order_followups(
+    order_id,
+    remarks
+)
+SELECT
+    order_id,
+    'Order pending for more than 3 days'
+FROM orders
+WHERE status = 'PENDING'
+AND order_date < NOW() - INTERVAL 3 DAY;
+
+
+-- CHECK SET-BASED RESULT
+
+SELECT * FROM order_followups;
+
+
+-- =====================================================
+-- TASK 5: BUSINESS ERROR USING SIGNAL
+-- =====================================================
+
+-- TEST INSUFFICIENT STOCK
+-- CURRENT LAPTOP STOCK IS 18
+
+-- RUN THIS SEPARATELY:
+
+-- CALL sp_place_order(1, 1, 100, @new_order_id);
+
+-- EXPECTED ERROR:
+-- ERROR 1644 (45000): Insufficient stock
+
+
+-- TEST INVALID QUANTITY
+
+-- CALL sp_place_order(1, 1, -5, @new_order_id);
+
+-- EXPECTED ERROR:
+-- ERROR 1644 (45000):
+-- Quantity must be greater than zero
+
+
+-- =====================================================
+-- FINAL VERIFICATION
+-- =====================================================
+
+SELECT DATABASE();
+
+SHOW TABLES;
+
+SELECT * FROM customers;
+
+SELECT * FROM products;
+
+SELECT * FROM orders;
+
+SELECT * FROM order_items;
+
+SELECT * FROM vw_order_summary;
+
+SELECT * FROM vw_low_stock;
+
+SELECT * FROM order_followups;
+
+
+-- SHOW PROCEDURES
+
+SHOW PROCEDURE STATUS
+WHERE Db = 'retail_order_db';
+
+
+-- SHOW FUNCTIONS
+
+SHOW FUNCTION STATUS
+WHERE Db = 'retail_order_db';
+
+
+-- =====================================================
+-- END OF DAY 9 ASSIGNMENT - SET 1
+-- =====================================================
